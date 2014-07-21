@@ -1,0 +1,130 @@
+Predicting the class of human activity
+================================================
+
+* * *
+
+## Description of my analysis
+
+The goal of my project is to predict the manner in which the participants in a human activity measurement experiment did their exercise, by relating a class variable to the other variables to predict with.
+
+The data for this project were kindly provided by the people at the [HAR PROJECT](http://groupware.les.inf.puc-rio.br/har).
+
+## Downloading and reading data
+
+The appropriate folder structure is created if not already present. Data are downloaded to obtain the CSV files needed for our analysis. The two datasets `training` and `testing` are populated.
+
+
+```{r getData, echo = TRUE}
+    require(downloader)
+	dataDir <- paste(getwd(),"\\data",sep="")
+    if (!file.exists(dataDir)) {
+    	dir.create(dataDir)
+	}
+    
+    ## Training set ##
+    fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+	csvFile <- paste(dataDir,"\\train.csv",sep="")
+	if (!file.exists(csvFile)) {
+        download(fileUrl, csvFile, mode = "wb")
+    }
+    training <- read.csv(csvFile)
+
+    ## Test set ##
+    fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+    csvFile <- paste(dataDir,"\\test.csv",sep="")
+	if (!file.exists(csvFile)) {
+        download(fileUrl, csvFile, mode = "wb")
+    }
+    testing <- read.csv(csvFile)
+```
+
+## Preprocessing
+
+In the dataset there are 160 columns. I started eliminating:
+
+- columns with too many Na's
+
+- columns with only empty and / or `#DIV/0!` data
+
+- near zero variance predictors
+
+- strongly correlated predictors (all but one)
+
+Clearly, the strong relationship between `x` and `classe` is only valid in the training set, and it would dramatically distort any prediction. For this reason I removed it.
+
+```{r preproc}
+    dim(training)
+    library(caret)
+
+    too.many.nas <- as.vector((apply(is.na(training), 2, sum)/nrow(training))>0.5)
+    training <- training[,!too.many.nas]
+    
+    div0 <- as.vector(apply((training=="#DIV/0!"), 2, sum)>1)
+    training <- training[,!div0]
+    
+    nzv <- nearZeroVar(training[1:60], saveMetrics = TRUE)
+    training <- training[,!nzv$nzv]
+
+    num.predictors <- training[,-c(1,2,5,59)]
+    descrCor <- cor(num.predictors)
+    highlyCorDescr <- findCorrelation(descrCor, cutoff = 0.9)
+    keep.cols <- setdiff(colnames(training), colnames(descrCor)[highlyCorDescr[-1]])
+    training <- training[,keep.cols]
+    
+    pairs(training[c(1,2,3,4,5,53)])
+    training <- training[,-c(1)]
+
+    dim(training)
+    
+```
+
+## Training the model
+
+The cleaned dataset is splitted into two parts: "true" training set, and validation set. The model is trained by means of the `rpart` function. The tree is pruned with the complexity parameter associated with the smallest cross-validated error.
+
+```{r train}
+    library(rpart)
+    library(kernlab)
+    library(rattle)
+
+    set.seed(888)
+    inTrain <- createDataPartition(y=training$classe,p=0.75,list=FALSE)
+    validation <- training[-inTrain,]
+    training <- training[inTrain,]
+    dim(training)
+    dim(validation)
+    
+    fit <- rpart(classe~.,data=training,method="class")
+
+    cp.threshold <- fit$cptable[which.min(fit$cptable[,"xerror"]),"CP"]
+    cp.threshold
+    pfit <- prune(fit,cp=cp.threshold)
+
+    fancyRpartPlot(pfit)
+```
+
+## Cross validation and estimate of in- and out of sample error
+
+The prediction based on the trained model is compared to the given values of the predicted variable for the training set. The corresponding in-sample error, estimated as miscalssification rate, is computed.
+
+```{r xval_in}
+    t.mis.bool <- predict(pfit,newdata=training,type="vector")!=as.numeric(training$classe)
+    sum(t.mis.bool)/nrow(training)
+```
+
+I expect the out-of-sample error to be larger than this value. In order to ascertain this, I compute the misclassification rate for the validation set.
+
+```{r xval_out}
+    v.mis.bool <- predict(pfit,newdata=validation,type="vector")!=as.numeric(validation$classe)
+    sum(v.mis.bool)/nrow(validation)
+```
+
+## Predicting testing values
+
+The value of the predicted variable is computed for the 20 assigned cases.
+
+```{r test}
+    pr20 <- predict(pfit,newdata=testing,type="vector")
+    factor(levels(training$classe)[pr20])
+```
+
